@@ -53,3 +53,45 @@ jobs:
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG ./application
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           echo "Pushed image: $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+
+  update-infra:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Set environment name from branch
+        id: vars
+        run: |
+          if [ "${{ github.ref_name }}" = "main" ]; then
+            echo "ENV_NAME=prod" >> $GITHUB_OUTPUT
+          elif [ "${{ github.ref_name }}" = "staging" ]; then
+            echo "ENV_NAME=staging" >> $GITHUB_OUTPUT
+          else
+            echo "ENV_NAME=dev" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Checkout infra repo
+        uses: actions/checkout@v4
+        with:
+          repository: pixelopscloud/ai-ecommerce-devops-infra
+          token: ${{ secrets.INFRA_REPO_TOKEN }}
+          ref: develop
+          path: infra
+
+      - name: Update image tag in values file
+        env:
+          ENV_NAME: ${{ steps.vars.outputs.ENV_NAME }}
+          IMAGE_TAG: ${{ steps.vars.outputs.ENV_NAME }}-${{ github.sha }}
+        run: |
+          cd infra
+          sed -i "s|tag: .*|tag: ${IMAGE_TAG}|" helm/nexvion/values-${ENV_NAME}.yaml
+          cat helm/nexvion/values-${ENV_NAME}.yaml
+
+      - name: Commit and push changes
+        run: |
+          cd infra
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add helm/nexvion/values-*.yaml
+          git commit -m "Update image tag for ${{ steps.vars.outputs.ENV_NAME }}" || echo "No changes to commit"
+          git push origin develop
